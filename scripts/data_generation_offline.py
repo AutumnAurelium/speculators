@@ -196,7 +196,7 @@ def find_last_checkpoint(output_dir: str) -> int:
 
 
 def save_sample_to_disk(data_dict, output_path):
-    """Helper function to save a single sample to disk (for async execution)"""
+    """Save a single sample to disk for async execution."""
     torch.save(data_dict, output_path)
     return output_path
 
@@ -277,6 +277,8 @@ def generate_and_save_hidden_states(args, dataset):
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     start_file_idx = find_last_checkpoint(args.output_dir)
+    sample_lengths = {}
+
     if start_file_idx > 0:
         log.subsection(f"Resuming: {start_file_idx} files already exist")
 
@@ -336,6 +338,7 @@ def generate_and_save_hidden_states(args, dataset):
                     log.warning(f"Skipping sample {i + j}: no tokens captured")
                     continue
 
+                sample_lengths[file_idx] = input_len
                 loss_mask = batch_loss_mask[j][:input_len]
 
                 result_cleaned = {
@@ -365,6 +368,11 @@ def generate_and_save_hidden_states(args, dataset):
             future.result()
 
     samples_saved = file_idx - start_file_idx
+
+    sample_lengths_output_path = Path(args.output_dir) / "sample_lengths.json"
+    with open(sample_lengths_output_path, "w") as f:
+        json.dump(sample_lengths, f, indent=2)
+
     log.info(f"Saved {samples_saved} new data points to {args.output_dir}")
 
     # Report validation summary
