@@ -98,6 +98,11 @@ class Trainer:
                     # architecture, including the existence of a layers attribute.
                     msg = "Only Eagle3DraftModel is supported for sharded training"
                     raise ValueError(msg)
+                # Use same seed on all ranks to ensure identical weight initialization
+                # This prevents one rank from having different (potentially NaN) values
+                torch.manual_seed(42)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(42)
                 for m in self.model.layers.children():  # type: ignore[union-attr]
                     if not isinstance(m, FSDPModule):
                         continue

@@ -67,6 +67,17 @@ def apply_fully_sharded(model: torch.nn.Module):
         msg = "Only Eagle3DraftModel is supported for sharded training"
         raise ValueError(msg)
 
+    # Move model to current device before FSDP setup
+    device = torch.device(f"cuda:{local_rank}")
+    model.to(device)
+
+    # Broadcast weights of top-level modules from rank 0 to all ranks
+    # This ensures lm_head, embed_tokens, fc, norm are synchronized before sharding
+    # (The decoder layers will be reinitialized after FSDP setup anyway)
+    for name, param in model.named_parameters():
+        if not name.startswith("layers."):
+            dist.broadcast(param.data, src=0)
+
     for layer in model.layers:  # type: ignore[union-attr]
         # we apply fully_shard to each DecoderLayer
         layer.to_empty(device="meta")

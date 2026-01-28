@@ -36,6 +36,12 @@ def _patched_forward(
             if inputs_embeds is not None
             else self.embed_input_ids(input_ids)
         )
+
+        # Apply muP (μP) scaling if enabled (e.g., AFMoE models)
+        # This must match vLLM inference behavior exactly
+        if getattr(self, "mup_enabled", False):
+            hidden_states = hidden_states * (self.config.hidden_size**0.5)
+
         residual = None
     else:
         assert intermediate_tensors is not None

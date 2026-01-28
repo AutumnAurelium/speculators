@@ -1,0 +1,11 @@
+uv run torchrun --standalone --nproc_per_node=8 scripts/train.py \
+    --verifier-name-or-path arcee-ai/trinity-mini \
+    --data-path ./work/int3_processed \
+    --save-path ./work/checkpoints/draft-model.eagle3 \
+    --d2t-path ./work/d2t.npy \
+    --t2d-path ./work/t2d.npy \
+    --total-seq-len 4096 \
+    --lr 1e-4 \
+    --ttt-steps 2 \
+    --num-layers 2 \
+    --epochs 100

@@ -183,6 +183,7 @@ class VllmHiddenStatesGenerator:
         cache_config = CacheConfig(
             block_size=VLLM_BLOCK_SIZE,
             gpu_memory_utilization=gpu_memory_utilization,
+            enable_prefix_caching=False,  # Disable to prevent token count mismatches
         )
 
         # For prefill-only workloads, use conservative scheduler limits
@@ -213,6 +214,7 @@ class VllmHiddenStatesGenerator:
                 max_model_len=max_model_len,
                 max_num_batched_tokens=max_num_batched_tokens,
                 is_encoder_decoder=False,
+                enable_chunked_prefill=False,  # Disable to ensure full sequences are processed
             ),
             device_config=DeviceConfig(),
             load_config=LoadConfig(),
@@ -267,21 +269,24 @@ class VllmHiddenStatesGenerator:
         self._request_counter += 1
         self.executor.collective_rpc("_reset_capture")
 
-        schedule_iterations = 0
+        total_tokens_scheduled = 0
         while (
             scheduler_output := self.scheduler.schedule()
         ).total_num_scheduled_tokens > 0:
-            schedule_iterations += 1
-            log.debug(
-                f"Scheduler iteration {schedule_iterations} - tokens: "
-                f"{scheduler_output.total_num_scheduled_tokens}"
-            )
+            total_tokens_scheduled += scheduler_output.total_num_scheduled_tokens
 
             model_output = self.executor.execute_model(scheduler_output)
             self.executor.sample_tokens(model_output)
 
             for req_id in scheduler_output.num_scheduled_tokens:
                 self.scheduler.finish_requests([req_id], RequestStatus.FINISHED_ABORTED)
+        
+        expected_total = sum(len(ids) for ids in input_ids_list)
+        if total_tokens_scheduled != expected_total:
+            log.warning(
+                f"Token count mismatch: scheduled {total_tokens_scheduled}, "
+                f"expected {expected_total}"
+            )
 
         # Get captured states from driver worker
         aux_hidden_states = self.executor.collective_rpc(
@@ -291,8 +296,6 @@ class VllmHiddenStatesGenerator:
 
         if not aux_hidden_states or len(aux_hidden_states) == 0:
             raise RuntimeError("Failed to capture hidden states from worker")
-
-        log.debug(f"Successfully captured {len(aux_hidden_states)} layers")
 
         seq_lens = [len(ids) for ids in input_ids_list]
         results = []
@@ -304,16 +307,14 @@ class VllmHiddenStatesGenerator:
 
             input_ids_tensor = torch.as_tensor(input_ids_list[i], dtype=torch.long)
 
-            results.append(
-                {
-                    "input_ids": input_ids_tensor,
-                    "hidden_states": layer_states,
-                    "loss_mask": None,
-                }
-            )
+            results.append({
+                "input_ids": input_ids_tensor,
+                "hidden_states": layer_states,
+                "loss_mask": None,
+            })
             offset += seq_len
-        empty_cache()
 
+        empty_cache()
         return results
 
     def __del__(self):

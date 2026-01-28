@@ -85,7 +85,7 @@ def get_target_vocab_size(args):
         return args.target_vocab_size
 
     logger.info(f"Loading target model config from {args.target_model_path}")
-    config = AutoConfig.from_pretrained(args.target_model_path)
+    config = AutoConfig.from_pretrained(args.target_model_path, trust_remote_code=True)
 
     # For multimodal models (Qwen3VL, etc.), extract text_config
     if hasattr(config, "text_config"):

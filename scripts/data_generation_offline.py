@@ -201,6 +201,54 @@ def save_sample_to_disk(data_dict, output_path):
     return output_path
 
 
+def validate_sample(result: dict, file_idx: int) -> list[str]:
+    """Validate a generated sample before saving.
+
+    Returns a list of validation issues (empty if valid).
+    """
+    issues = []
+    input_ids = result["input_ids"]
+    hidden_states = result["hidden_states"]
+    loss_mask = result["loss_mask"]
+
+    seq_len = len(input_ids)
+
+    # Check hidden states lengths match input_ids
+    for layer_idx, hs in enumerate(hidden_states):
+        if hs.shape[0] != seq_len:
+            issues.append(
+                f"data_{file_idx}: hidden_states[{layer_idx}] length {hs.shape[0]} "
+                f"!= input_ids length {seq_len}"
+            )
+
+    # Check loss_mask length
+    if len(loss_mask) != seq_len:
+        issues.append(
+            f"data_{file_idx}: loss_mask length {len(loss_mask)} "
+            f"!= input_ids length {seq_len}"
+        )
+
+    # Check for non-finite values in hidden states
+    for layer_idx, hs in enumerate(hidden_states):
+        nonfinite_count = (~torch.isfinite(hs)).sum().item()
+        if nonfinite_count > 0:
+            issues.append(
+                f"data_{file_idx}: hidden_states[{layer_idx}] has "
+                f"{nonfinite_count} non-finite values"
+            )
+
+    # Check loss_mask contains only 0s and 1s
+    if isinstance(loss_mask, torch.Tensor):
+        unique_vals = torch.unique(loss_mask).tolist()
+    else:
+        unique_vals = list(set(loss_mask))
+    bad_vals = [v for v in unique_vals if v not in (0, 1)]
+    if bad_vals:
+        issues.append(f"data_{file_idx}: loss_mask has values outside {{0,1}}: {bad_vals}")
+
+    return issues
+
+
 def save_config(args, generator, num_samples, output_dir):
     """Save metadata config file for reproducibility."""
     log.subsection("Saving configuration metadata")
@@ -258,6 +306,9 @@ def generate_and_save_hidden_states(args, dataset):
     # Use ThreadPoolExecutor for async file I/O
     max_io_workers = MAX_IO_WORKERS
 
+    # Track validation issues
+    all_validation_issues: list[str] = []
+
     pbar = tqdm(
         range(start_sample_idx, num_samples, args.batch_size),
         desc="Generating hidden states",
@@ -279,6 +330,12 @@ def generate_and_save_hidden_states(args, dataset):
             for j, result in enumerate(results):
                 # Truncate loss_mask to match input_ids length (generator may truncate)
                 input_len = len(result["input_ids"])
+
+                # Skip zero-length samples (failed to capture any hidden states)
+                if input_len == 0:
+                    log.warning(f"Skipping sample {i + j}: no tokens captured")
+                    continue
+
                 loss_mask = batch_loss_mask[j][:input_len]
 
                 result_cleaned = {
@@ -286,6 +343,14 @@ def generate_and_save_hidden_states(args, dataset):
                     "hidden_states": [h.contiguous() for h in result["hidden_states"]],
                     "loss_mask": loss_mask,
                 }
+
+                # Validate before saving
+                issues = validate_sample(result_cleaned, file_idx)
+                if issues:
+                    all_validation_issues.extend(issues)
+                    for issue in issues:
+                        log.warning(f"VALIDATION: {issue}")
+
                 output_path = Path(args.output_dir) / f"data_{file_idx}.pt"
                 future = thread_executor.submit(
                     save_sample_to_disk, result_cleaned, output_path
@@ -301,6 +366,15 @@ def generate_and_save_hidden_states(args, dataset):
 
     samples_saved = file_idx - start_file_idx
     log.info(f"Saved {samples_saved} new data points to {args.output_dir}")
+
+    # Report validation summary
+    if all_validation_issues:
+        log.warning(
+            f"VALIDATION SUMMARY: {len(all_validation_issues)} issues found "
+            f"across {samples_saved} samples"
+        )
+    else:
+        log.info("VALIDATION: All samples passed validation checks")
 
     save_config(args, generator, num_samples, args.output_dir)
 

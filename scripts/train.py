@@ -1,4 +1,6 @@
 import argparse
+import json
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -87,7 +89,9 @@ def setup_dataloader(
 def create_transformer_layer_config(
     verifier_name_or_path: str, num_layers: int
 ) -> LlamaConfig:
-    verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
+    verifier_config = AutoConfig.from_pretrained(
+        verifier_name_or_path, trust_remote_code=True
+    )
 
     # For multimodal models (Qwen3VL, etc.), extract text_config
     if hasattr(verifier_config, "text_config"):
@@ -150,6 +154,19 @@ def main(args: argparse.Namespace):
             ),
         ),
     )
+
+    # Load eagle_aux_hidden_state_layer_ids from data_config.json for vLLM compatibility
+    data_config_path = Path(args.data_path) / "data_config.json"
+    if data_config_path.exists():
+        with open(data_config_path) as f:
+            data_config = json.load(f)
+        layer_ids = data_config.get("hidden_states", {}).get("layer_ids", [])
+        if layer_ids:
+            # vLLM uses +1 offset for layer IDs compared to speculators
+            # Only include auxiliary layers (first N-1), NOT the target layer (last one)
+            # The target layer is what the model predicts, not an FC input
+            aux_layers = [lid + 1 for lid in layer_ids[:-1]]
+            speculator_config.eagle_aux_hidden_state_layer_ids = aux_layers
 
     # Setup draft model
     draft_model = Eagle3DraftModel(config=speculator_config, t2d=t2d, d2t=d2t)

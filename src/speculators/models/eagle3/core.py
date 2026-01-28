@@ -230,7 +230,9 @@ class Eagle3DraftModel(SpeculatorModel):
     def _setup_embeddings_and_lm_heads(self, config: VerifierConfig, t2d: torch.Tensor):
         if config.name_or_path is None:
             raise ValueError("VerifierConfig `name_or_path` value is required.")
-        verifier_model_config = AutoConfig.from_pretrained(config.name_or_path)
+        verifier_model_config = AutoConfig.from_pretrained(
+            config.name_or_path, trust_remote_code=True
+        )
 
         # For multimodal models (Qwen3VL, etc.), extract text_config
         if hasattr(verifier_model_config, "text_config"):
